@@ -1,0 +1,7 @@
+{
+  "name": "grecas-marcacoes",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marcação de fisioterapia GRECAS Vagos",
+  "engines": { "node": ">=18" }
+}
