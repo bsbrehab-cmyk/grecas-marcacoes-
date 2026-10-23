@@ -9,7 +9,10 @@ exports.handler = async (event) => {
 
     const token = await g.getAccessToken();
     const busy = await g.getBusy(token, date);
-    const slots = g.allSlots().map((time) => ({ time, free: g.isFree(busy, date, time) }));
+    const slots = g.allSlots().map((time) => {
+      const left = g.spotsLeft(busy, date, time);
+      return { time, free: left > 0, left };
+    });
     return g.json(200, { slots });
   } catch (e) {
     console.error(e);
