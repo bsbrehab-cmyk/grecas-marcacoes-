@@ -9,7 +9,8 @@ const RULES = {
   weekday: 3,          // 0=Dom ... 3=Quarta
   start: '18:00',
   end: '19:30',        // o último atendimento termina às 19:30
-  duration: 20,        // minutos por atleta
+  duration: 15,        // minutos por atleta
+  capacity: 2,         // atletas por horário
   weeksAhead: 4        // quantas semanas à frente se pode marcar
 };
 
@@ -95,23 +96,44 @@ async function gcal(path, token, options = {}) {
   return data;
 }
 
-// Intervalos ocupados (inclui eventos que o fisioterapeuta crie manualmente no calendário)
+// Eventos do dia, cada um com um "peso" (quantas vagas ocupa).
+//  - evento normal (uma marcação)            -> 1 vaga
+//  - evento de dia inteiro (ex.: feriado)    -> bloqueia tudo
+//  - evento cujo título começa por BLOQUEADO -> bloqueia tudo nesse horário
+//  - evento marcado como "Disponível"        -> ignorado
 async function getBusy(token, dateStr) {
   const timeMin = new Date(lisbonToUtcMs(dateStr, '00:00')).toISOString();
   const timeMax = new Date(lisbonToUtcMs(dateStr, '23:59')).toISOString();
-  const data = await gcal('/freeBusy', token, {
-    method: 'POST',
-    body: JSON.stringify({ timeMin, timeMax, items: [{ id: CALENDAR_ID }] })
+  const q = new URLSearchParams({
+    timeMin, timeMax, singleEvents: 'true', orderBy: 'startTime', maxResults: '250', timeZone: TZ
   });
-  return (data.calendars?.[CALENDAR_ID]?.busy || []).map((b) => [Date.parse(b.start), Date.parse(b.end)]);
+  const data = await gcal(`/calendars/${encodeURIComponent(CALENDAR_ID)}/events?${q}`, token);
+  const out = [];
+  for (const ev of data.items || []) {
+    if (ev.status === 'cancelled' || ev.transparency === 'transparent') continue;
+    const blocks = /^\s*bloqueado/i.test(ev.summary || '');
+    const weight = blocks ? RULES.capacity : 1;
+    if (ev.start?.dateTime) {
+      out.push([Date.parse(ev.start.dateTime), Date.parse(ev.end.dateTime), weight]);
+    } else if (ev.start?.date) { // dia inteiro
+      const s = lisbonToUtcMs(ev.start.date, '00:00');
+      const e = ev.end?.date ? lisbonToUtcMs(ev.end.date, '00:00') : s + 86400000;
+      out.push([s, e, RULES.capacity]);
+    }
+  }
+  return out;
 }
 
-function isFree(busy, dateStr, time) {
+// Vagas que ainda restam num horário (0 = completo)
+function spotsLeft(busy, dateStr, time) {
   const s = lisbonToUtcMs(dateStr, time);
   const e = s + RULES.duration * 60000;
-  if (s <= Date.now()) return false;
-  return !busy.some(([bs, be]) => s < be && e > bs);
+  if (s <= Date.now()) return 0;
+  const used = busy.reduce((n, [bs, be, w]) => (s < be && e > bs ? n + w : n), 0);
+  return Math.max(0, RULES.capacity - used);
 }
+
+const isFree = (busy, dateStr, time) => spotsLeft(busy, dateStr, time) > 0;
 
 const json = (statusCode, body) => ({
   statusCode,
@@ -119,4 +141,4 @@ const json = (statusCode, body) => ({
   body: JSON.stringify(body)
 });
 
-module.exports = { TZ, CALENDAR_ID, RULES, allSlots, toMin, toHHMM, validateDate, getAccessToken, gcal, getBusy, isFree, json };
+module.exports = { TZ, CALENDAR_ID, RULES, allSlots, toMin, toHHMM, validateDate, getAccessToken, gcal, getBusy, isFree, spotsLeft, json };
